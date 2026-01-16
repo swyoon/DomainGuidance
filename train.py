@@ -15,7 +15,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
-from torchvision.datasets import ImageFolder
+from torchvision.datasets import ImageFolder, Flowers102
 from torchvision import transforms
 import numpy as np
 from collections import OrderedDict
@@ -137,6 +137,11 @@ def main(args):
     else:
         logger = create_logger(None)
 
+    if args.dataset == "flowers102":
+        if args.num_classes != 102 and rank == 0:
+            logger.info("Overriding num_classes to 102 for the Flowers102 dataset.")
+        args.num_classes = 102
+
     # Create model:
     assert args.image_size % 8 == 0, "Image size must be divisible by 8 (for the VAE encoder)."
     latent_size = args.image_size // 8
@@ -145,9 +150,10 @@ def main(args):
         num_classes=args.num_classes
     )
 
-    ckpt_path = args.ckpt or f"DiT-XL-2-{args.image_size}x{args.image_size}.pt"
+    ckpt_path = f"DiT-XL-2-{args.image_size}x{args.image_size}.pt"
     state_dict = find_model(ckpt_path)
-    model.load_state_dict(state_dict)
+    state_dict.pop("y_embedder.embedding_table.weight", None)
+    model.load_state_dict(state_dict,strict=False)
 
     # Note that parameter initialization is done within the DiT constructor
     ema = deepcopy(model).to(device)  # Create an EMA of the model for use after training
@@ -167,7 +173,23 @@ def main(args):
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
     ])
-    dataset = ImageFolder(args.data_path, transform=transform)
+    if args.dataset == "flowers102":
+        # Coordinate dataset download once across ranks.
+        data_root = args.data_path or os.path.join(os.getcwd(), "data", "flowers102")
+        if rank == 0:
+            dataset = Flowers102(root=data_root, split="train", transform=transform, download=True)
+            dist.barrier()
+        else:
+            dist.barrier()
+            dataset = Flowers102(root=data_root, split="train", transform=transform, download=False)
+        dataset_name = "Flowers102 (train)"
+        dataset_location = data_root
+    else:
+        if args.data_path is None:
+            raise ValueError("--data-path must be provided when using the imagefolder dataset.")
+        dataset = ImageFolder(args.data_path, transform=transform)
+        dataset_name = "ImageFolder"
+        dataset_location = args.data_path
     sampler = DistributedSampler(
         dataset,
         num_replicas=dist.get_world_size(),
@@ -184,7 +206,7 @@ def main(args):
         pin_memory=True,
         drop_last=True
     )
-    logger.info(f"Dataset contains {len(dataset):,} images ({args.data_path})")
+    logger.info(f"Dataset contains {len(dataset):,} images ({dataset_name}) from {dataset_location}")
 
     # Prepare models for training:
     update_ema(ema, model.module, decay=0)  # Ensure EMA is initialized with synced weights
@@ -259,13 +281,16 @@ def main(args):
 if __name__ == "__main__":
     # Default args here will train DiT-XL/2 with the hyperparameters we used in our paper (except training iters).
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data-path", type=str, required=True)
+    parser.add_argument("--data-path", type=str, default=None,
+                        help="Path to dataset root when using imagefolder. Defaults to ./data/flowers102 for Flowers102.")
+    parser.add_argument("--dataset", type=str, choices=["imagefolder", "flowers102"], default="imagefolder",
+                        help="Select the dataset loader. Use flowers102 to download and train on the torchvision Flowers102 splits.")
     parser.add_argument("--results-dir", type=str, default="results")
     parser.add_argument("--model", type=str, choices=list(DiT_models.keys()), default="DiT-XL/2")
     parser.add_argument("--image-size", type=int, choices=[256, 512], default=256)
     parser.add_argument("--num-classes", type=int, default=1000)
     parser.add_argument("--epochs", type=int, default=1400)
-    parser.add_argument("--global-batch-size", type=int, default=256)
+    parser.add_argument("--global-batch-size", type=int, default=32)
     parser.add_argument("--global-seed", type=int, default=0)
     parser.add_argument("--vae", type=str, choices=["ema", "mse"], default="ema")  # Choice doesn't affect training
     parser.add_argument("--num-workers", type=int, default=4)

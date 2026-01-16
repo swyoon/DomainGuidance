@@ -41,6 +41,13 @@ def build_cfg_forward_fn(c_model, u_model):
     return cfg_forward_fn
 ```
 
+## Training
+* flowers
+  ```bash
+  torchrun --nproc_per_node=1 --master_port=29500 train.py --dataset flowers102 --num-classes 102
+  ```
+
+
 ## BibTeX
 
 ```bibtex
