@@ -87,7 +87,7 @@ def main(args):
     if args.ckpt is None:
         assert args.model == "DiT-XL/2", "Only DiT-XL/2 models are available for auto-download."
         assert args.image_size in [256, 512]
-        assert args.num_classes == 1000
+        # assert args.num_classes == 1000
     if args.uncond_ckpt is None:
         assert args.model == "DiT-XL/2", "Only DiT-XL/2 models are available for auto-download."
         assert args.image_size in [256, 512]
@@ -102,7 +102,7 @@ def main(args):
 
     uncond_model = DiT_models[args.uncond_model](
         input_size=latent_size,
-        num_classes=args.num_classes
+        num_classes=1000
     ).to(device)
 
     # Auto-download a pre-trained model or load a custom DiT checkpoint from train.py:
