@@ -44,9 +44,12 @@ def build_cfg_forward_fn(c_model, u_model):
 ## Training
 * flowers
   ```bash
+  # train 
   torchrun --nproc_per_node=1 --master_port=29500 train.py --dataset flowers102 --num-classes 102
-  ```
 
+  # test
+  CUDA_VISIBLE_DEVICES=1 torchrun --nproc_per_node=1 --master_port=29600 sample_dog_ddp.py --num-classes 102 --ckpt ./DomainGuidance/results/013-DiT-XL-2/checkpoints/0025000.pt --num-sampling-steps 50
+  ```
 
 ## BibTeX
 
