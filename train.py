@@ -15,7 +15,7 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
-from torchvision.datasets import ImageFolder, Flowers102
+from torchvision.datasets import ImageFolder, Flowers102, FGVCAircraft
 from torchvision import transforms
 import numpy as np
 from collections import OrderedDict
@@ -129,7 +129,7 @@ def main(args):
         os.makedirs(args.results_dir, exist_ok=True)  # Make results folder (holds all experiment subfolders)
         experiment_index = len(glob(f"{args.results_dir}/*"))
         model_string_name = args.model.replace("/", "-")  # e.g., DiT-XL/2 --> DiT-XL-2 (for naming folders)
-        experiment_dir = f"{args.results_dir}/{experiment_index:03d}-{model_string_name}"  # Create an experiment folder
+        experiment_dir = f"{args.results_dir}/{experiment_index:03d}-{args.dataset}-{model_string_name}"  # Create an experiment folder
         checkpoint_dir = f"{experiment_dir}/checkpoints"  # Stores saved model checkpoints
         os.makedirs(checkpoint_dir, exist_ok=True)
         logger = create_logger(experiment_dir)
@@ -141,6 +141,10 @@ def main(args):
         if args.num_classes != 102 and rank == 0:
             logger.info("Overriding num_classes to 102 for the Flowers102 dataset.")
         args.num_classes = 102
+    elif args.dataset == "aircraft":
+        if args.num_classes != 100 and rank == 0:
+            logger.info("Overriding num_classes to 100 for the FGVCAircraft dataset.")
+        args.num_classes = 100
 
     # Create model:
     assert args.image_size % 8 == 0, "Image size must be divisible by 8 (for the VAE encoder)."
@@ -183,6 +187,23 @@ def main(args):
             dist.barrier()
             dataset = Flowers102(root=data_root, split="train", transform=transform, download=False)
         dataset_name = "Flowers102 (train)"
+        dataset_location = data_root
+    elif args.dataset == "aircraft":
+        # Coordinate dataset download once across ranks.
+        transform = transforms.Compose([
+            transforms.Resize(size=(args.image_size, args.image_size)),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)
+        ])
+        data_root = args.data_path or os.path.join(os.getcwd(), "data", "aircraft")
+        if rank == 0:
+            dataset = FGVCAircraft(root=data_root, split="train", transform=transform, download=True)
+            dist.barrier()
+        else:
+            dist.barrier()
+            dataset = FGVCAircraft(root=data_root, split="train", transform=transform, download=False)
+        dataset_name = "FGVCAircraft (train)"
         dataset_location = data_root
     else:
         if args.data_path is None:
@@ -295,9 +316,9 @@ if __name__ == "__main__":
     # Default args here will train DiT-XL/2 with the hyperparameters we used in our paper (except training iters).
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-path", type=str, default=None,
-                        help="Path to dataset root when using imagefolder. Defaults to ./data/flowers102 for Flowers102.")
-    parser.add_argument("--dataset", type=str, choices=["imagefolder", "flowers102"], default="imagefolder",
-                        help="Select the dataset loader. Use flowers102 to download and train on the torchvision Flowers102 splits.")
+                        help="Path to dataset root when using imagefolder. Defaults to ./data/flowers102 for Flowers102 and ./data/aircraft for FGVCAircraft.")
+    parser.add_argument("--dataset", type=str, choices=["imagefolder", "flowers102", "aircraft"], default="imagefolder",
+                        help="Select the dataset loader. Use flowers102 to download and train on the torchvision Flowers102 splits. Use aircraft for FGVCAircraft.")
     parser.add_argument("--results-dir", type=str, default="results")
     parser.add_argument("--model", type=str, choices=list(DiT_models.keys()), default="DiT-XL/2")
     parser.add_argument("--image-size", type=int, choices=[256, 512], default=256)
